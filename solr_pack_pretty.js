@@ -1,0 +1,684 @@
+YUI.add("bepress.search.solr", function(a) {
+    var m = a.Lang,
+        l = m.isValue,
+        g = m.isArray,
+        c = m.trim,
+        d = m.trimLeft,
+        k = a.namespace("bepress.search.solr"),
+        h, b = {
+            "(": ")",
+            "{": "}",
+            "[": "]"
+        },
+        e, f, j, i, n, o;
+    k.Operator = n = function(p) {
+        this.op = p;
+    };
+    o = n.prototype;
+    o.toString = function() {
+        return "[Operator: " + this.op + "]";
+    };
+    o.getValue = function() {
+        return this.op;
+    };
+    o.toSolrString = function() {
+        return this.op;
+    };
+    k.Operators = h = {
+        AND: new n("AND"),
+        OR: new n("OR"),
+        NOT: new n("NOT"),
+        "&&": new n("&&"),
+        "||": new n("||"),
+        "!": new n("!")
+    };
+    k.Term = j = function(p) {
+        this.valueBuffer = [];
+        this.valueCount = 0;
+        a.mix(this, p, true, ["mod", "field", "value", "valueBuffer", "isOpen", "opener", "modBoost", "boostVal", "modProx", "proxVal", "boostBuffer", "proxBuffer", "valueCount"]);
+        if (this.value) {
+            this.isOpen = false;
+            this.valueBuffer = null;
+        }
+    };
+    i = j.prototype;
+    i.getField = function() {
+        if (this.field && this.field !== "") {
+            return this.field;
+        } else {
+            return k.DEFAULT_FIELD;
+        }
+    };
+    i.getRecordedField = function() {
+        return this.field;
+    };
+    i.setField = function(p) {
+        this.field = p;
+    };
+    i.getParent = function() {
+        return this.parent;
+    };
+    i.setParent = function(p) {
+        this.parent = p;
+    };
+    i.getValue = function() {
+        var p = this.value ? this.value : "";
+        if (this.valueBuffer) {
+            p += this.valueBuffer.join("");
+        }
+        return c(p);
+    };
+    i.setValue = function(p) {
+        this.incrementValueCount();
+        this.valueBuffer = p;
+    };
+    i.pushValue = function(p) {
+        if (p) {
+            this.incrementValueCount();
+            if (this.value) {
+                this.value += " " + p;
+            } else {
+                if (this.valueBuffer) {
+                    this.valueBuffer.push(" ");
+                    this.valueBuffer.push(p.split(""));
+                } else {
+                    this.valueBuffer = [" "];
+                    this.valueBuffer.push(p.split(""));
+                }
+            }
+        }
+    };
+    i.incrementValueCount = function() {
+        this.valueCount += 1;
+    };
+    i.validateBoostValue = function(p) {
+        if (p.match(/^\d+(?:\.\d+)?$/)) {
+            return true;
+        } else {
+            throw new Error("Invalid boost value: " + p);
+        }
+    };
+    i.validateProximityFuzzyValue = function(p) {
+        if (p.match(/^(?:\d+(?:\.\d+)?)?$/)) {
+            return true;
+        } else {
+            throw new Error("Invalid proximity/fuzzy value: " + p);
+        }
+    };
+    i.openBoost = function() {
+        this.closeValue();
+        this.modBoost = true;
+        this.boostBuffer = [];
+    };
+    i.closeBoost = function() {
+        this.modBoost = true;
+        this.setBoost(this.boostBuffer.join(""));
+        this.boostBuffer = null;
+    };
+    i.setBoost = function(p) {
+        if (this.validateBoostValue(p)) {
+            this.boostVal = p;
+        }
+    };
+    i.openProx = function() {
+        this.closeValue();
+        this.modProx = true;
+        this.proxBuffer = [];
+    };
+    i.closeProx = function() {
+        this.modProx = true;
+        this.setProzimityFuzzy(this.proxBuffer.join(""));
+        this.proxBuffer = null;
+    };
+    i.setProzimityFuzzy = function(p) {
+        if (this.validateProximityFuzzyValue(p)) {
+            this.proxVal = p;
+        }
+    };
+    i.closeValue = function() {
+        if (this.valueBuffer) {
+            this.value = this.valueBuffer.join("");
+            this.valueBuffer = null;
+        }
+        this.isOpen = false;
+    };
+    i.toString = function() {
+        var q = "[Term:{";
+        var p = [];
+        if (l(this.mod)) {
+            p.push("mod: " + this.mod);
+        }
+        if (l(this.field)) {
+            p.push("field: " + this.field);
+        }
+        if (this.getValue()) {
+            p.push("value: " + this.getValue());
+        }
+        if (this.modBoost) {
+            p.push("boosted: " + (this.boostVal ? this.boostVal : this.boostBuffer.join("")));
+        }
+        if (this.modProx) {
+            p.push("prox_fuzzy: " + (this.proxVal ? this.proxVal : this.proxBuffer.join("")));
+        }
+        return q + p.join(", ") + "}]";
+    };
+    i.toSolrString = function(r) {
+        var p = "",
+            q = this.getValue();
+        if (q) {
+            if (this.mod) {
+                p += this.mod;
+            }
+            if (l(this.field)) {
+                if (r || this.field !== k.DEFAULT_FIELD) {
+                    p += this.field + ":";
+                }
+            }
+            if (this.valueCount > 1 && !this.opener) {
+                this.opener = "(";
+            }
+            if (this.opener) {
+                p += this.opener + " " + q + " " + b[this.opener];
+            } else {
+                p += q;
+            }
+            if (this.modBoost) {
+                p += "^" + this.boostVal;
+            }
+            if (this.modProx) {
+                p += "~";
+                if (this.proxVal) {
+                    p += this.proxVal;
+                }
+            }
+        }
+        return p;
+    };
+    i.advancedFormString = function() {
+        var p = "",
+            q = this.getValue();
+        if (q) {
+            if (this.mod) {
+                p += this.mod;
+            }
+            if (this.valueCount > 1 && !this.opener) {
+                this.opener = "(";
+            }
+            if (this.boostVal && this.opener) {
+                p += this.opener + " " + q + " " + b[this.opener];
+            } else {
+                if (this.opener && this.opener !== "(") {
+                    p += this.opener + " " + q + " " + b[this.opener];
+                } else {
+                    p += q;
+                }
+            }
+            if (this.modBoost) {
+                p += "^" + this.boostVal;
+            }
+            if (this.modProx) {
+                p += "~";
+                if (this.proxVal) {
+                    p += this.proxVal;
+                }
+            }
+        }
+        return c(p);
+    };
+    k.Parser = e = function(p) {
+        this.reset();
+        a.mix(this, p, true, ["strict", "allowedFields"]);
+    };
+    f = e.prototype;
+    f.reset = function() {
+        this.inputString = null;
+        this.inputBuffer = [];
+        this.termList = [];
+        this.currentTerm = null;
+        this.readIndex = 0;
+        this.modifier = null;
+        this.opener = null;
+        this.openerCount = 0;
+        this.noSpecialNext = false;
+        this.noSpecialUntil = false;
+        this.specialRE = /[-+"\\\[\{\(\)\}\]:~^\s]/;
+        this.heldOperator = null;
+        this.forceToTerm = null;
+    };
+    f.parse = function(r, t, s) {
+        var p, q, u;
+        this.reset();
+        this.inputString = r;
+        p = this.inputString.length;
+        if (s) {
+            this.currentTerm = this.forceToTerm = s;
+        }
+        for (this.readIndex = 0; this.readIndex <= p; this.readIndex++) {
+            u = this.inputString.charAt(this.readIndex);
+            u = u ? u : null;
+            if (this.currentTerm) {
+                if (u === null || this.specialRE.test(u)) {
+                    this.handleSpecialWithTerm(u, this.readIndex);
+                } else {
+                    if (this.currentTerm.modBoost) {
+                        this.toBoost(u);
+                    } else {
+                        if (this.currentTerm.modProx) {
+                            this.toProx(u);
+                        } else {
+                            this.toCurrentTerm(u, this.readIndex);
+                            this.noSpecialNext = false;
+                        }
+                    }
+                }
+            } else {
+                if (u === null || this.specialRE.test(u)) {
+                    this.handleSpecialNoTerm(u, this.readIndex);
+                } else {
+                    this.toBuffer(u);
+                    this.noSpecialNext = false;
+                }
+            }
+        }
+        if (this.currentTerm) {
+            this.pushTerm();
+        }
+        if (t) {
+            this.termList = this.optimizeTermList(this.termList);
+        }
+        return this.termList;
+    };
+    f.optimizeTermList = function(u) {
+        var s, r, p, v, t = [],
+            q;
+        for (q = 0; q < u.length; q++) {
+            p = t.length > 0 ? t[t.length - 1] : null;
+            v = this.getLastTerm(q, t);
+            s = u[q];
+            if (v) {
+                if (s instanceof j) {
+                    if (!v.modBoost && !v.modProx && v.getField() === s.getField()) {
+                        if (this.heldOperator) {
+                            v.pushValue(this.heldOperator.toSolrString());
+                            this.heldOperator = null;
+                        }
+                        v.pushValue(s.toSolrString());
+                    } else {
+                        if (this.heldOperator) {
+                            t.push(this.heldOperator);
+                            this.heldOperator = null;
+                        }
+                        t.push(s);
+                    }
+                } else {
+                    this.heldOperator = v instanceof j ? s : this.heldOperator;
+                }
+            } else {
+                if (s instanceof j) {
+                    t.push(s);
+                } else {
+                    this.heldOperator = v instanceof j ? s : this.heldOperator;
+                }
+            }
+        }
+        return t;
+    };
+    f.toCurrentTerm = function(t, s) {
+        var p = this.currentTerm,
+            r = /\s/,
+            q = p.valueBuffer[p.valueBuffer.length - 1];
+        if (!p.isOpen) {
+            throw new Error("Can not send '" + t + "' to closed term at char " + s);
+        }
+        p.valueBuffer.push(t);
+        if ((!q || q.match(r)) && !t.match(r) && !this.noSpecialUntil) {
+            p.incrementValueCount();
+        }
+    };
+    f.toBoost = function(p) {
+        this.currentTerm.boostBuffer.push(p);
+    };
+    f.toProx = function(p) {
+        this.currentTerm.proxBuffer.push(p);
+    };
+    f.toBuffer = function(p) {
+        this.inputBuffer.push(p);
+    };
+    f.pushTerm = function() {
+        var p;
+        if (p = this.currentTerm) {
+            if (!this.forceToTerm) {
+                p.closeValue();
+            }
+            if (p.modBoost || p.modProx) {
+                if (p.modBoost) {
+                    p.closeBoost();
+                } else {
+                    if (p.modProx) {
+                        p.closeProx();
+                    }
+                }
+            }
+            if (!this.forceToTerm) {
+                this.termList.push(this.currentTerm);
+                this.currentTerm = null;
+            }
+        }
+    };
+    f.resetBuffer = function() {
+        this.inputBuffer = [];
+    };
+    f.handleSpecialWithTerm = function(s, r) {
+        var q, p = this.currentTerm;
+        if (s === null) {
+            if (p.isOpen) {
+                if (p.opener && !this.forceToTerm) {
+                    throw new Error("Expected closer '" + b[p.opener] + "' at char " + r);
+                } else {
+                    if (p.boostBuffer && p.boostBuffer.length === 0) {
+                        throw new Error("Missing boost value at char " + r);
+                    } else {
+                        if (p.proxBuffer && p.proxBuffer.length === 0) {
+                            throw new Error("Missing proximity/fuzzy value at char " + r);
+                        } else {
+                            p.closeValue();
+                        }
+                    }
+                }
+            } else {
+                p.closeValue();
+            }
+        } else {
+            if (this.noSpecialNext) {
+                this.toCurrentTerm(s, r);
+                this.noSpecialNext = false;
+            } else {
+                if (this.noSpecialUntil === s) {
+                    this.toCurrentTerm(s, r);
+                    this.noSpecialUntil = null;
+                } else {
+                    if (this.noSpecialUntil) {
+                        if (s === "\\") {
+                            this.noSpecialNext = true;
+                            this.toCurrentTerm(s, r);
+                        } else {
+                            this.toCurrentTerm(s, r);
+                        }
+                    } else {
+                        if (p.isOpen) {
+                            q = b[p.opener];
+                        }
+                        switch (s) {
+                            case "\\":
+                                this.toCurrentTerm(s, r);
+                                this.noSpecialNext = true;
+                                break;
+                            case '"':
+                                this.toCurrentTerm(s, r);
+                                this.noSpecialUntil = s;
+                                break;
+                            case p.opener:
+                                this.openerCount++;
+                                this.toCurrentTerm(s, r);
+                                break;
+                            case q:
+                                this.openerCount--;
+                                if (this.openerCount === 0 && !this.forceToTerm) {
+                                    p.closeValue();
+                                } else {
+                                    if (this.forceToTerm) {
+                                        if (this.openerCount > 0) {
+                                            this.toCurrentTerm(s, r);
+                                        }
+                                    } else {
+                                        this.toCurrentTerm(s, r);
+                                    }
+                                }
+                                break;
+                            case "^":
+                                if (!p.isOpen) {
+                                    p.openBoost();
+                                } else {
+                                    this.toCurrentTerm(s, r);
+                                }
+                                break;
+                            case "~":
+                                if (!p.isOpen) {
+                                    p.openProx();
+                                } else {
+                                    this.toCurrentTerm(s, r);
+                                }
+                                break;
+                            default:
+                                if (s.match(/\s/)) {
+                                    if (p.isOpen) {
+                                        if (p.opener || this.forceToTerm) {
+                                            this.toCurrentTerm(s, r);
+                                        } else {
+                                            this.pushTerm();
+                                        }
+                                    } else {
+                                        this.pushTerm();
+                                    }
+                                } else {
+                                    if (s.match(/[\[\{\(]/)) {
+                                        if (p.isOpen) {
+                                            if (p.getValue().length === 0) {
+                                                p.opener = s;
+                                                this.openerCount++;
+                                            } else {
+                                                this.toCurrentTerm(s, r);
+                                            }
+                                        } else {
+                                            if (p.getValue()) {
+                                                this.pushTerm();
+                                                this.handleSpecialNoTerm(s, r);
+                                            } else {
+                                                p.isOpen = true;
+                                                this.openerCount++;
+                                                p.opener = s;
+                                            }
+                                        }
+                                    } else {
+                                        this.toCurrentTerm(s, r);
+                                    }
+                                }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    f.handleSpecialNoTerm = function(t, s) {
+        var p, r, q;
+        if (t === null) {
+            if (this.inputBuffer.length > 0) {
+                q = d(this.inputBuffer.join(""));
+                if (q.match(/^\s+$/)) {} else {
+                    if (h[q]) {
+                        this.termList.push(h[q]);
+                        this.resetBuffer();
+                    } else {
+                        this.currentTerm = p = new j({
+                            mod: this.modifier,
+                            isOpen: true
+                        });
+                        r = new k.Parser();
+                        r.parse(q, false, p);
+                        this.pushTerm();
+                        this.resetBuffer();
+                    }
+                }
+            }
+        } else {
+            if (this.noSpecialNext) {
+                this.toBuffer(t);
+                this.noSpecialNext = false;
+            } else {
+                if (this.noSpecialUntil === t) {
+                    this.toBuffer(t);
+                    this.noSpecialUntil = null;
+                } else {
+                    if (this.noSpecialUntil) {
+                        if (t === "\\") {
+                            this.noSpecialNext = true;
+                            this.toBuffer(t);
+                        } else {
+                            this.toBuffer(t);
+                        }
+                    } else {
+                        switch (t) {
+                            case "\\":
+                                this.noSpecialNext = true;
+                                this.toBuffer(t);
+                                break;
+                            case '"':
+                                this.toBuffer(t);
+                                this.noSpecialUntil = '"';
+                                break;
+                            case "-":
+                                if (this.inputBuffer.length > 0) {
+                                    this.toBuffer(t);
+                                } else {
+                                    this.modifier = t;
+                                }
+                                break;
+                            case "+":
+                                if (this.inputBuffer.length > 0) {
+                                    this.toBuffer(t);
+                                } else {
+                                    this.modifier = t;
+                                }
+                                break;
+                            case ":":
+                                q = this.inputBuffer.join("");
+                                q = d(q);
+                                if (q.length === 0) {
+                                    throw new Error("Invalid ':' at " + s);
+                                }
+                                this.currentTerm = new j({
+                                    mod: this.modifier,
+                                    field: q,
+                                    isOpen: true
+                                });
+                                this.resetBuffer();
+                                break;
+                            case "^":
+                                this.currentTerm = p = new j({
+                                    mod: this.modifier,
+                                    isOpen: true
+                                });
+                                r = new k.Parser();
+                                r.parse(this.inputBuffer.join(""), false, p);
+                                p.openBoost();
+                                this.resetBuffer();
+                                break;
+                            case "~":
+                                this.currentTerm = p = new j({
+                                    mod: this.modifier,
+                                    isOpen: true
+                                });
+                                r = new k.Parser();
+                                r.parse(this.inputBuffer.join(""), false, p);
+                                p.openProx();
+                                this.resetBuffer();
+                                break;
+                            default:
+                                if (t.match(/\s/)) {
+                                    if (this.inputBuffer.length > 0) {
+                                        q = d(this.inputBuffer.join(""));
+                                        if (q.match(/^\s+$/)) {
+                                            this.toBuffer(t);
+                                        } else {
+                                            if (h[q]) {
+                                                this.termList.push(h[q]);
+                                                this.resetBuffer();
+                                            } else {
+                                                this.currentTerm = p = new j({
+                                                    mod: this.modifier,
+                                                    isOpen: true
+                                                });
+                                                r = new k.Parser();
+                                                r.parse(q, false, p);
+                                                this.pushTerm();
+                                                this.resetBuffer();
+                                            }
+                                        }
+                                    } else {
+                                        this.toBuffer(t);
+                                    }
+                                } else {
+                                    if (t.match(/[\[\{\(]/)) {
+                                        q = d(this.inputBuffer.join(""));
+                                        if (q.length > 0) {
+                                            this.currentTerm = p = new j({
+                                                mod: this.modifier,
+                                                isOpen: true
+                                            });
+                                            r = new k.Parser();
+                                            r.parse(q, false, p);
+                                            this.pushTerm();
+                                            this.resetBuffer();
+                                        }
+                                        this.currentTerm = new j({
+                                            mod: this.modifier,
+                                            isOpen: true,
+                                            opener: t
+                                        });
+                                        this.openerCount++;
+                                    } else {
+                                        if (t.match(/[\]\}\)]/)) {
+                                            throw new Error("Unexpected closing '" + t + "' at " + s);
+                                        } else {
+                                            throw new Error("Unexpected special '" + t + "' at " + s);
+                                        }
+                                    }
+                                }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    f.getLastTerm = function(t, s) {
+        var q, p = null,
+            r = s ? s : this.termList;
+        for (q = t - 1; q >= 0; q--) {
+            if (r[q] instanceof j) {
+                p = r[q];
+                break;
+            }
+        }
+        return p;
+    };
+    k.DEFAULT_FIELD = "text";
+    k.DEFAULT_OPERATOR = "AND";
+    k.allowedFields = {
+        text: true,
+        "abstract": true,
+        subject: true,
+        author: true,
+        institution: true,
+        title: true,
+        document_type: true,
+        publication: true,
+        author_fname: true,
+        author_lname: true
+    };
+    k.parseSolrString = function(p, s, r) {
+        var q = k.parser.parse(p, s, r);
+        return q;
+    };
+    k.parser = new e({
+        allowedFields: k.allowedFields
+    });
+    k.setAllowedFields = function(q, p) {
+        if (p) {
+            k.allowedFields = q;
+        } else {
+            a.mix(k.allowedFields, q, true);
+        }
+    };
+}, "0.03", {
+    requires: ["node"]
+});
